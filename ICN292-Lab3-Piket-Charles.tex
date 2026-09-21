@@ -1,0 +1,466 @@
+\documentclass[10pt,a4paper]{article}
+
+\input{config}
+
+\begin{document}
+
+\begin{center}
+\vspace{-2mm}
+{\Huge Laboratorio 3}\\
+{\Large \sc{ICN-292 --- Sistemas de Información para la Gestión}}
+
+\vspace{2mm}
+\hrule
+
+\textbf{Charles Piket Silva} \\
+{\small Ingeniería Civil Industrial, 202360512-3, \emph{cpiket@usm.cl}}\\
+{\small \textbf{Repositorio GitHub:} \url{https://github.com/Cpikets/ICN292-Lab3-Piket-Charles.git}}
+\end{center}
+
+\section*{Resumen ejecutivo}
+
+Se desarrolló en n8n un flujo para gestionar las devoluciones de AndesHogar SpA. El proceso recibe solicitudes mediante un Webhook, aplica las reglas de triage en el orden definido, consulta el valor de la UF, registra el resultado, envía una notificación al cliente y responde a la llamada HTTP. Para la semilla personal $S=794$, los parámetros utilizados fueron $U=\$74.000$ y $D=21$ días.
+
+En la prueba base se procesaron las 15 solicitudes entregadas. Cinco fueron aprobadas automáticamente, seis quedaron en revisión y cuatro fueron rechazadas. Ninguna fue clasificada como dato inválido. El monto total procesado fue de \$1.251.820 y la tasa de aprobación automática fue de 33,33\%.
+
+También se implementó un workflow programado que consolida diariamente el registro de devoluciones y genera un correo con solicitudes y montos por ruta, monto total del día y tasa de aprobación automática. De forma adicional se configuró un Error Workflow para notificar fallas. Las pruebas de casos borde confirmaron que $monto=U$ y $dias\_desde\_compra=D$ permanecen dentro de lo aceptado. También se comprobó que un SKU inexistente puede ser aprobado porque el flujo actual no consulta el catálogo, y que un monto no numérico puede hacer fallar el nodo Switch al intentar convertirlo.
+
+Como MVP, la solución permite automatizar el triage y mantener trazabilidad, pero no se recomienda convertirla todavía en el sistema definitivo. Antes se deberían incorporar validación de esquema para entradas no numéricas, validación del SKU contra el catálogo, evidencias completas de manejo de errores y controles operacionales para dependencias externas como Gmail y la consulta de UF. Con esas correcciones, el flujo actual puede servir como base para una versión definitiva.
+
+
+\section{Parámetros personalizados y reglas de negocio}
+
+Para $S=794$, los parámetros se calculan de la siguiente forma:
+
+\[
+U=30.000+1.000\,(794\bmod 50)=74.000,
+\]
+
+\[
+D=7+7\,(794\bmod 4)=21\text{ días}.
+\]
+
+Las reglas se aplicaron en el orden indicado en el enunciado. La primera condición que se cumple determina la ruta y el motivo asociado a la solicitud:
+
+\begin{enumerate}[label=\arabic*.]
+    \item DATOS\_INVALIDOS: \texttt{id\_solicitud} vacío o $monto \leq 0$.
+    \item RECHAZO: $dias\_desde\_compra > 21$ o $estado\_producto = danado\_por\_uso$.
+    \item REVISION: $monto > 74000$ o $estado\_producto = con\_fallas$.
+    \item APROBACION: cualquier solicitud que no cumpla una regla anterior.
+\end{enumerate}
+
+Las comparaciones de monto y plazo son estrictas. Un monto igual a $U$ no entra a revisión por monto y una solicitud con exactamente $D$ días no se rechaza por plazo. Esta condición se verificó además con pruebas específicas descritas en la Parte C.
+
+\section{Parte A --- Workflow principal de triage}
+
+\subsection{Entrada y recepción de solicitudes}
+
+El workflow principal recibe las solicitudes mediante un Webhook configurado con método POST y path \texttt{devoluciones}. El lote se recibe dentro de \texttt{body} y el nodo \textit{Normalizar entrada} separa el arreglo para continuar con un ítem por solicitud.
+
+n8n entrega una \textit{Test URL} y una \textit{Production URL}. De acuerdo con la documentación oficial del nodo Webhook, la Test URL se registra al escuchar o ejecutar una prueba y permite ver los datos directamente en el editor; la Production URL queda disponible cuando el workflow está publicado y sus ejecuciones se revisan desde el historial. La evidencia final del lote base corresponde a una ejecución en modo de producción. La referencia utilizada fue \url{https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/}.
+
+El lote base contiene 15 solicitudes. La Figura~\ref{fig:entrada15} muestra el conjunto utilizado en la prueba.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{Figuras/Evidencia_A3_Entrada_15_Solicitudes.png}
+\caption{Lote de 15 solicitudes utilizado como entrada del workflow principal.}
+\label{fig:entrada15}
+\end{figure}
+
+\subsection{Clasificación de las solicitudes}
+
+El nodo Switch está configurado en modo \textit{Rules}. La validación de tipos es estricta y las condiciones numéricas convierten los textos recibidos mediante \texttt{toNumber()} antes de comparar. Las seis reglas se mantienen separadas para conservar un motivo específico por causal:
+
+\begin{table}[H]
+\centering
+\footnotesize
+\begin{tabularx}{\textwidth}{c X l}
+\toprule
+Orden & Condición & Salida \\
+\midrule
+1 & \texttt{id\_solicitud} vacío & INVALIDO\_CAMPO \\
+2 & \texttt{monto.toNumber()} $\leq 0$ & INVALIDO\_MONTO \\
+3 & \texttt{dias\_desde\_compra.toNumber()} $>21$ & RECHAZO\_PLAZO \\
+4 & \texttt{estado\_producto = danado\_por\_uso} & RECHAZO\_ESTADO \\
+5 & \texttt{monto.toNumber()} $>74000$ & REVISION\_MONTO \\
+6 & \texttt{estado\_producto = con\_fallas} & REVISION\_FALLA \\
+--- & Ninguna regla anterior se cumple & APROBACION (Fallback) \\
+\bottomrule
+\end{tabularx}
+\caption{Reglas configuradas en el nodo Switch.}
+\label{tab:switch-rules}
+\end{table}
+
+El \textit{Fallback Output} se utiliza como rama de aprobación. La configuración no envía un mismo ítem a todas las salidas coincidentes, de modo que se conserva la precedencia de la política. Las dos salidas de datos inválidos se reúnen en \textit{Unir invalidos}; las dos de rechazo, en \textit{Unir rechazo}; y las dos de revisión, en \textit{Unir revision}. Después se aplica un nodo Edit Fields por ruta.
+
+Los Edit Fields escriben \texttt{ruta}, \texttt{motivo}, $U$ y $D$, además de conservar los datos de la solicitud. Para DATOS\_INVALIDOS el motivo distingue entre \texttt{id\_solicitud invalida} y \texttt{Monto invalido}; para RECHAZO distingue entre \texttt{Plazo maximo excedido} y \texttt{Producto danado por uso}; para REVISION distingue entre \texttt{Monto sobre el umbral} y \texttt{Producto con fallas}; y para APROBACION utiliza \texttt{Cumple condiciones de aprobacion}. Las cuatro rutas se reúnen luego en \textit{Decision consolidada}.
+
+La Figura~\ref{fig:workflow-principal} muestra la ejecución completa del lote base. Se reciben 15 solicitudes y se obtienen 4 rechazos, 6 revisiones y 5 aprobaciones. Las capturas de configuración detallada del Switch se dejaron en el Anexo~\ref{anexo:evidencias}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\linewidth]{Figuras/Evidencia_A1_Workflow_Principal_Final.png}
+\caption{Ejecución final del workflow principal de triage de devoluciones.}
+\label{fig:workflow-principal}
+\end{figure}
+
+\subsection{Consulta de UF}
+
+Después de clasificar las solicitudes, el nodo \textit{Consultar UF1} realiza una solicitud a \url{https://mindicador.cl/api/uf}. La consulta se ejecuta una sola vez y se combina con todas las solicitudes mediante el nodo \textit{Unir datos y UF}.
+
+El campo consumido de la respuesta es \texttt{serie[0].valor}. Ese valor se guarda como \texttt{valor\_uf} y el monto equivalente se calcula como:
+
+\[
+monto\_uf=\frac{monto}{\texttt{serie[0].valor}},
+\]
+
+redondeado a dos decimales. El nodo HTTP tiene activado \textit{Retry On Fail}, con un máximo de tres intentos y una espera de 1000 ms entre intentos.
+
+\subsection{Registro, notificación y respuesta}
+
+Después de incorporar el valor de la UF, el flujo se divide en dos ramas. Una envía una notificación individual mediante Gmail al campo \texttt{email\_cliente}; el mensaje informa identificador, ruta, motivo, monto y monto aproximado en UF. La otra prepara el registro, comprueba que exista la tabla \texttt{registro\_devoluciones}, guarda los datos y termina en \textit{Respond to Webhook}.
+
+El registro conserva \texttt{fecha\_registro}, \texttt{id\_solicitud}, SKU, monto, días desde la compra, estado, ruta, motivo, $U$, $D$, valor de la UF, monto en UF y correo del cliente. La fecha se obtiene al momento de la ejecución y la tabla se crea automáticamente si no existe.
+
+La operación de registro es \textit{Upsert} utilizando \texttt{id\_solicitud} como condición. Esto evita duplicar las mismas solicitudes al repetir una prueba: un identificador existente se actualiza y uno nuevo se agrega. El nodo \textit{Respond to Webhook} devuelve todos los ítems recibidos desde el registro.
+
+La Figura~\ref{fig:registro-final} muestra el registro obtenido después de procesar el lote completo.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\linewidth]{Figuras/Evidencia_A2_Registro_Final_15_Solicitudes.png}
+\caption{Registro final de las 15 solicitudes procesadas.}
+\label{fig:registro-final}
+\end{figure}
+
+\subsection{Resultados del lote base}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|r|r|}
+\hline
+Ruta & Cantidad & Monto total \\
+\hline
+APROBACION & 5 & \$195.930 \\
+REVISION & 6 & \$854.940 \\
+RECHAZO & 4 & \$200.950 \\
+DATOS\_INVALIDOS & 0 & \$0 \\
+\hline
+Total & 15 & \$1.251.820 \\
+\hline
+\end{tabular}
+\caption{Resumen de resultados del workflow principal.}
+\label{tab:resumen-principal}
+\end{table}
+
+La tasa de aprobación automática es:
+
+\[
+\frac{5}{15}\times 100=33,33\%.
+\]
+
+Cuando una solicitud cumple más de una condición, se utiliza la primera que aparece en el orden definido. DEV-1119 tiene 25 días y estado \texttt{danado\_por\_uso}, por lo que se rechaza por plazo máximo excedido antes de revisar el estado del producto. DEV-C03 tiene 29 días y un monto de \$79.990, por lo que también se rechaza por plazo antes de llegar a la regla de revisión por monto. DEV-1120 supera el umbral y además tiene estado \texttt{con\_fallas}; queda en revisión por monto, ya que esa condición aparece primero dentro de la ruta de revisión.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{|l|r|r|l|l|l|}
+\hline
+ID & Monto & Días & Estado & Ruta & Motivo \\
+\hline
+DEV-1115 & \$19.990 & 3 & sin\_abrir & APROBACION & Cumple condiciones de aprobación \\
+DEV-1116 & \$69.980 & 5 & abierto\_sin\_uso & APROBACION & Cumple condiciones de aprobación \\
+DEV-1117 & \$24.990 & 12 & con\_fallas & REVISION & Producto con fallas \\
+DEV-1118 & \$79.990 & 4 & sin\_abrir & REVISION & Monto sobre el umbral \\
+DEV-1119 & \$45.990 & 25 & danado\_por\_uso & RECHAZO & Plazo máximo excedido \\
+DEV-1120 & \$89.990 & 2 & con\_fallas & REVISION & Monto sobre el umbral \\
+DEV-1121 & \$289.990 & 9 & sin\_abrir & REVISION & Monto sobre el umbral \\
+DEV-1122 & \$45.990 & 2 & sin\_abrir & APROBACION & Cumple condiciones de aprobación \\
+DEV-1123 & \$39.980 & 15 & danado\_por\_uso & RECHAZO & Producto dañado por uso \\
+DEV-1124 & \$49.980 & 1 & abierto\_sin\_uso & APROBACION & Cumple condiciones de aprobación \\
+DEV-1125 & \$34.990 & 22 & sin\_abrir & RECHAZO & Plazo máximo excedido \\
+DEV-1126 & \$79.990 & 8 & con\_fallas & REVISION & Monto sobre el umbral \\
+DEV-C01 & \$9.990 & 1 & sin\_abrir & APROBACION & Cumple condiciones de aprobación \\
+DEV-C02 & \$289.990 & 2 & sin\_abrir & REVISION & Monto sobre el umbral \\
+DEV-C03 & \$79.990 & 29 & abierto\_sin\_uso & RECHAZO & Plazo máximo excedido \\
+\hline
+\end{tabular}
+\caption{Resultado individual de las 15 solicitudes del lote base.}
+\label{tab:detalle15}
+\end{table}
+
+\section{Parte B --- Flujo programado de resumen}
+
+\subsection{Funcionamiento del workflow}
+
+El workflow de resumen está configurado con un \textit{Schedule Trigger} diario a las 20:00. Primero lee todos los registros de la tabla \texttt{registro\_devoluciones}, conserva únicamente los de la fecha actual y utiliza el nodo \textit{Summarize} para agrupar por \texttt{ruta} y sumar \texttt{monto}. Después reúne los grupos en un solo ítem y calcula las métricas del día.
+
+La secuencia utilizada es:
+
+\begin{center}
+Schedule Trigger $\rightarrow$ Leer registro $\rightarrow$ Filtrar hoy $\rightarrow$ Summarize\\
+$\rightarrow$ Aggregate $\rightarrow$ Calcular métricas $\rightarrow$ Preparar mensaje $\rightarrow$ Gmail
+\end{center}
+
+La Figura~\ref{fig:workflow-diario} muestra una ejecución del flujo. Se leen los registros del día, se generan los grupos por ruta y luego se prepara un único ítem para el correo.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\linewidth]{Figuras/Evidencia_B1_Workflow_Resumen_Diario.png}
+\caption{Ejecución del workflow de resumen diario.}
+\label{fig:workflow-diario}
+\end{figure}
+
+\subsection{Contenido del resumen}
+
+El correo incluye solicitudes por ruta, monto acumulado por ruta, monto total del día y tasa de aprobación automática. La tasa se calcula como $100\times aprobaciones/total$ cuando existen solicitudes y se fija en cero si el total del día es cero.
+
+En la ejecución utilizada como evidencia se obtuvo:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|r|r|}
+\hline
+Ruta & Solicitudes & Monto \\
+\hline
+Aprobación automática & 5 & \$195.930 \\
+Revisión manual & 6 & \$854.940 \\
+Rechazo & 4 & \$200.950 \\
+Datos inválidos & 0 & \$0 \\
+\hline
+\end{tabular}
+\caption{Métricas del resumen diario.}
+\end{table}
+
+El asunto del correo se configuró como \texttt{Resumen diario | fecha\_resumen}. El cuerpo se envía en HTML y presenta las cifras por ruta junto con el resumen general. La Figura~\ref{fig:correo-diario} muestra el correo recibido durante la prueba.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{Figuras/Evidencia_B2_Correo_Resumen_Diario.png}
+\caption{Correo generado por el workflow de resumen diario.}
+\label{fig:correo-diario}
+\end{figure}
+
+\subsection{Día sin movimientos}
+
+El workflow contempla el caso en que no existan registros para la fecha de ejecución. Las búsquedas de cada ruta utilizan cero como valor por defecto, el total diario queda en cero, la tasa de aprobación se fija en 0\% y el mensaje informa que no hubo movimientos durante la jornada.
+
+\section{Parte C --- Errores, bordes y límites}
+
+\subsection{Error Workflow y configuración de errores}
+
+Se creó un Error Workflow con la secuencia \textit{Error Trigger} $\rightarrow$ \textit{Preparar aviso de error} $\rightarrow$ Gmail. El nodo intermedio extrae el nombre del workflow, identificador de ejecución, último nodo ejecutado, mensaje de error y fecha, y construye el correo de aviso. El workflow principal tiene asociado este Error Workflow desde su configuración.
+
+Un Error Workflow permite reaccionar a una ejecución que termina con error sin depender de que una persona esté observando n8n. Esto es especialmente útil para un flujo programado: si se ejecuta fuera del horario de supervisión y falla, el error puede quedar registrado pero pasar inadvertido si no existe una notificación externa.
+
+n8n ofrece tres comportamientos de \textit{On Error}: detener el workflow; continuar usando la salida normal; o continuar usando una salida específica de error. En la configuración revisada se utiliza lo siguiente:
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabularx}{\textwidth}{p{0.34\textwidth} p{0.22\textwidth} X}
+\toprule
+Nodo(s) & On Error & Razón \\
+\midrule
+Webhook; Normalizar entrada; Unir invalidos; Unir rechazo; Unir revision; Switch1; Marcar datos invalidos1; Marcar rechazo1; Marcar revision1; Marcar aprobacion1; Decision consolidada2 & Stop Workflow (predeterminado) & Una falla de recepción, conversión o clasificación impide asegurar una decisión correcta. El caso de \texttt{monto = ``veinte mil''} confirma este comportamiento en Switch1. \\
+\addlinespace
+Consultar UF1 & Stop Workflow (predeterminado) + Retry On Fail & Antes de detener la ejecución realiza hasta tres intentos, separados por 1000 ms, para tolerar fallas transitorias de la API. \\
+\addlinespace
+Unir datos y UF; Agregar datos UF1; Preparar registro; Crear tabla si no existe; Esperar tabla y continuar; Registrar solicitud; Respond to Webhook & Stop Workflow (predeterminado) & Una falla en la combinación, preparación, persistencia o respuesta impide cerrar correctamente la solicitud y debe dejar la ejecución como fallida. \\
+\addlinespace
+Notificar cliente1 & Continue using regular output & El correo al cliente es una rama paralela. Una falla de notificación no debe impedir que la otra rama registre la solicitud y responda al Webhook. \\
+\addlinespace
+Continue using error output & No utilizado en el workflow principal & No se creó una salida de error separada por nodo; los errores que detienen la ejecución quedan centralizados mediante el Error Workflow. \\
+\bottomrule
+\end{tabularx}
+\caption{Configuración de On Error del workflow principal. Los nodos sin un valor explícito en el archivo exportado mantienen el comportamiento predeterminado.}
+\label{tab:onerror}
+\end{table}
+
+En el workflow de resumen diario y en el Error Workflow tampoco aparecen cambios explícitos de \textit{On Error} en los archivos exportados; por ello mantienen el comportamiento predeterminado de detener la ejecución ante una falla de nodo.
+
+Durante las pruebas también apareció un problema de autenticación de Gmail con el mensaje \textit{Unable to sign without access token}. La credencial OAuth fue reconectada y el envío volvió a funcionar. La prueba manual del Error Workflow se conserva en el Anexo~\ref{anexo:evidencias}, ya que sirve como evidencia de la construcción del mecanismo, pero no reemplaza la ejecución fallida solicitada para los casos inválidos.
+
+\subsection{Tres entradas inválidas}
+
+Se probaron tres entradas inválidas distintas. La carga enviada, el resultado esperado y el observado se resumen en la Tabla~\ref{tab:invalidas}. Las capturas completas se dejaron en el Anexo~\ref{anexo:evidencias} para no interrumpir el desarrollo principal.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\begin{tabularx}{\textwidth}{p{0.23\textwidth} p{0.27\textwidth} X}
+\toprule
+Entrada & Comportamiento esperado & Comportamiento observado \\
+\midrule
+\texttt{id\_solicitud} vacío & Clasificar como DATOS\_INVALIDOS antes de evaluar rechazo o revisión. & Se activó la salida INVALIDO\_CAMPO y la solicitud continuó por DATOS\_INVALIDOS con motivo \texttt{id\_solicitud invalida}. \\
+\addlinespace
+\texttt{monto = 0} & Clasificar como DATOS\_INVALIDOS por la regla $monto\leq 0$. & Se activó INVALIDO\_MONTO. Aunque el estado era \texttt{con\_fallas}, la precedencia mantuvo la ruta DATOS\_INVALIDOS y el motivo \texttt{Monto invalido}. \\
+\addlinespace
+\texttt{monto = ``veinte mil''} & La conversión numérica no puede completarse; al menos un nodo debe fallar. & La ejecución falló en Switch1 al evaluar una condición que utiliza \texttt{toNumber()}. Este caso muestra que el flujo no valida previamente que el monto sea numérico. \\
+\bottomrule
+\end{tabularx}
+\caption{Entradas inválidas probadas en la Parte C.}
+\label{tab:invalidas}
+\end{table}
+
+El tercer caso cumple la exigencia de provocar una falla real de un nodo. La diferencia respecto de los dos primeros es que el monto no numérico no pertenece a una ruta de negocio controlada: produce un error antes de que el flujo pueda asignar una ruta.
+
+\subsection{Casos de frontera}
+
+Se construyeron dos solicitudes adicionales para probar exactamente los límites $U$ y $D$.
+
+En \texttt{BORDE-U} se utilizó $monto=74000$, $dias\_desde\_compra=5$ y estado \texttt{sin\_abrir}. El resultado observado fue APROBACION. La condición de revisión es $monto>74000$, por lo que la igualdad no activa REVISION\_MONTO.
+
+En \texttt{BORDE-D} se utilizó $dias\_desde\_compra=21$, monto \$29.000 y estado \texttt{sin\_abrir}. El resultado observado también fue APROBACION. La condición de rechazo es $dias\_desde\_compra>21$, por lo que la igualdad no activa RECHAZO\_PLAZO.
+
+Las entradas y la ejecución de aprobación se muestran en el Anexo~\ref{anexo:evidencias}. Los dos resultados confirman el comportamiento inclusivo pedido en la regla 6 del enunciado.
+
+\subsection{Error de tipo intencional}
+
+El enunciado solicita cambiar temporalmente la condición de monto del Switch de \textit{Number} a \textit{String}, enviar DEV-C01 con monto ``9990'', mostrar la ruta obtenida, explicar el comportamiento y luego revertir el cambio. Esta prueba todavía no cuenta con evidencia de ejecución disponible en los archivos entregados para esta actualización, por lo que debe completarse antes de la entrega final. En la configuración normal, DEV-C01 se procesa como número mediante \texttt{toNumber()} y termina en APROBACION.
+
+\subsection{Casos que el flujo no puede resolver}
+
+El caso \texttt{monto = ``veinte mil''} muestra una limitación de validación de tipo: el Switch intenta convertir el texto a número y la ejecución falla. Para resolverlo en una versión definitiva se debería validar primero que el campo contenga un valor numérico antes de aplicar las comparaciones de negocio.
+
+También se probó una solicitud con \texttt{sku = ZZ-999}, manteniendo valores válidos en los demás campos. El resultado observado fue APROBACION. Esto ocurre porque el flujo no verifica la existencia del SKU contra el catálogo: mientras monto, plazo y estado sean válidos, el SKU no interviene en la clasificación. Para resolverlo se necesita consultar el catálogo antes del triage y derivar los SKU inexistentes a una ruta de datos inválidos o revisión. La carga utilizada se muestra en el Anexo~\ref{anexo:evidencias}.
+
+\section{Trazabilidad y controles de entrega}
+
+Cada solicitud queda registrada con identificador, SKU, monto, días desde la compra, estado, ruta, motivo, $U$ y $D$. También se guarda el valor de la UF utilizado, el monto equivalente en UF, la fecha de registro y el correo del cliente. El resumen diario utiliza esos mismos registros.
+
+El repositorio público se encuentra indicado en la portada y en el resumen ejecutivo. Antes de la exportación definitiva se deben revisar los tres archivos JSON y confirmar que no contengan contraseñas, tokens, valores Bearer ni datos fijados manualmente. En la exportación del workflow principal utilizada para esta revisión todavía existe contenido en \texttt{pinData}; por tanto, antes de entregar se debe hacer \textit{unpin} de esos datos y volver a exportar el workflow. Los workflows de resumen diario y Error Workflow revisados sí presentan \texttt{pinData} vacío.
+
+Además del informe, la entrega debe contener el workflow principal de triage, el workflow emisor, el workflow programado de resumen y las capturas de al menos dos ejecuciones exitosas y una fallida con el panel de ejecución visible. Las evidencias complementarias utilizadas en este informe se organizan en el anexo siguiente.
+
+\section*{Conclusión}
+
+El workflow principal procesó correctamente las 15 solicitudes del lote base y mantuvo la trazabilidad desde la entrada hasta el registro final. El resultado fue de 5 aprobaciones, 6 revisiones y 4 rechazos. La consulta de UF, el registro con \textit{Upsert}, la notificación al cliente y la respuesta del Webhook quedaron integrados al flujo.
+
+Las pruebas adicionales confirmaron la precedencia de las reglas para datos inválidos y el comportamiento de los límites $U$ y $D$. También permitieron identificar dos límites concretos del MVP: un monto no numérico puede detener la ejecución y un SKU inexistente puede ser tratado como válido. El flujo programado entrega el resumen diario solicitado y el Error Workflow proporciona un mecanismo de aviso ante fallas.
+
+La implementación sirve como MVP y como base para continuar el desarrollo, pero antes de considerarla definitiva se deben cerrar la prueba intencional de tipo solicitada en la Parte C, añadir validaciones de entrada y catálogo, y completar los controles finales de exportación y evidencia.
+
+\clearpage
+\appendix
+\section{Evidencias complementarias}
+\label{anexo:evidencias}
+
+Este anexo reúne capturas necesarias para verificar configuraciones y casos de prueba sin recargar el desarrollo principal.
+
+\subsection{Configuración del Switch}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.48\textwidth]{Figuras/Nueva_Switch_Reglas_1_3.png}
+\hfill
+\includegraphics[width=0.48\textwidth]{Figuras/Nueva_Switch_Reglas_4_6.png}
+\caption{Reglas 1 a 6 configuradas en el nodo Switch.}
+\label{fig:anexo-switch}
+\end{figure}
+
+\subsection{Caso inválido: identificador vacío}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Caso_ID_Vacio_Entrada.png}
+\caption{Carga de prueba con \texttt{id\_solicitud} vacío.}
+\label{fig:idvacio-entrada}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{Figuras/Nueva_Caso_ID_Vacio_Workflow.png}
+\caption{Ejecución del caso con identificador vacío por la ruta de datos inválidos.}
+\label{fig:idvacio-workflow}
+\end{figure}
+
+\subsection{Caso inválido: monto igual a cero}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Caso_Monto_Cero_Entrada.png}
+\caption{Carga de prueba con \texttt{monto = 0}.}
+\label{fig:monto0-entrada}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{Figuras/Nueva_Caso_Monto_Cero_Workflow.png}
+\caption{Ejecución del caso \texttt{monto = 0} por la ruta de datos inválidos.}
+\label{fig:monto0-workflow}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Caso_Monto_Cero_Correo.png}
+\caption{Notificación generada para el caso \texttt{monto = 0}.}
+\label{fig:monto0-correo}
+\end{figure}
+
+\subsection{Caso inválido: monto no numérico}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Caso_VeinteMil_Entrada.png}
+\caption{Carga de prueba con \texttt{monto = ``veinte mil''}.}
+\label{fig:veintemil-entrada}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{Figuras/Nueva_Caso_VeinteMil_Falla.png}
+\caption{Ejecución fallida en Switch1 al procesar el monto no numérico.}
+\label{fig:veintemil-falla}
+\end{figure}
+
+\subsection{Prueba manual del Error Workflow}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{Figuras/Nueva_Error_Workflow_Ejecucion.png}
+\caption{Ejecución manual del Error Workflow: Error Trigger, preparación del aviso y Gmail.}
+\label{fig:errorworkflow-ejecucion}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{Figuras/Evidencia_C2_Correo_Error_Workflow_Prueba.png}
+\caption{Correo de prueba generado manualmente por el Error Workflow.}
+\label{fig:errorworkflow-correo}
+\end{figure}
+
+\subsection{Casos de frontera}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Frontera_U_Entrada.png}
+\caption{Entrada del caso frontera $monto=U=74000$.}
+\label{fig:borde-u}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{Figuras/Nueva_Frontera_Aprobacion_Workflow.png}
+\caption{Ejecución por la rama de aprobación para el caso frontera.}
+\label{fig:borde-aprobacion}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_Frontera_D_Entrada.png}
+\caption{Entrada del caso frontera $dias\_desde\_compra=D=21$.}
+\label{fig:borde-d}
+\end{figure}
+
+\subsection{SKU inexistente}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{Figuras/Nueva_SKU_ZZ999_Entrada.png}
+\caption{Entrada con \texttt{sku = ZZ-999}; el flujo la clasifica según monto, plazo y estado porque no valida catálogo.}
+\label{fig:sku-zz999}
+\end{figure}
+
+\end{document}
