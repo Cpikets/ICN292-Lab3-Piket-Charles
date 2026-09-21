@@ -1,7 +1,7 @@
 # ICN292 - Laboratorio 3
 
 **Nombre:** Charles Piket Silva  
-**RUT sin dígito verificador:** 21748794
+**RUT :** 21748794-3
 **Fecha:** 20/09/2026
 
 ## Archivos
