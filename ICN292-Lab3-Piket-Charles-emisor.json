@@ -1,0 +1,65 @@
+{
+  "name": "ICN292-Lab3-Piket-Charles-emisor",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "92d5f93f-9b43-4075-b394-fc85fc4f0d8c",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://charlespiket.app.n8n.cloud/webhook/devoluciones",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[\n  {\n    \"id_solicitud\": \"DEV-1115\",\n    \"sku\": \"AU-210\",\n    \"unidades\": \"1\",\n    \"monto\": \"19990\",\n    \"dias_desde_compra\": \"3\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"cliente1@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1116\",\n    \"sku\": \"TE-330\",\n    \"unidades\": \"2\",\n    \"monto\": \"69980\",\n    \"dias_desde_compra\": \"5\",\n    \"estado_producto\": \"abierto_sin_uso\",\n    \"email_cliente\": \"cliente2@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1117\",\n    \"sku\": \"HV-050\",\n    \"unidades\": \"1\",\n    \"monto\": \"24990\",\n    \"dias_desde_compra\": \"12\",\n    \"estado_producto\": \"con_fallas\",\n    \"email_cliente\": \"cliente3@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1118\",\n    \"sku\": \"MW-150\",\n    \"unidades\": \"1\",\n    \"monto\": \"79990\",\n    \"dias_desde_compra\": \"4\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"cliente4@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1119\",\n    \"sku\": \"PL-120\",\n    \"unidades\": \"1\",\n    \"monto\": \"45990\",\n    \"dias_desde_compra\": \"25\",\n    \"estado_producto\": \"danado_por_uso\",\n    \"email_cliente\": \"cliente5@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1120\",\n    \"sku\": \"AS-260\",\n    \"unidades\": \"1\",\n    \"monto\": \"89990\",\n    \"dias_desde_compra\": \"2\",\n    \"estado_producto\": \"con_fallas\",\n    \"email_cliente\": \"cliente6@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1121\",\n    \"sku\": \"LV-330\",\n    \"unidades\": \"1\",\n    \"monto\": \"289990\",\n    \"dias_desde_compra\": \"9\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"cliente7@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1122\",\n    \"sku\": \"PL-120\",\n    \"unidades\": \"1\",\n    \"monto\": \"45990\",\n    \"dias_desde_compra\": \"2\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"cliente8@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1123\",\n    \"sku\": \"AU-210\",\n    \"unidades\": \"2\",\n    \"monto\": \"39980\",\n    \"dias_desde_compra\": \"15\",\n    \"estado_producto\": \"danado_por_uso\",\n    \"email_cliente\": \"cliente9@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1124\",\n    \"sku\": \"HV-050\",\n    \"unidades\": \"2\",\n    \"monto\": \"49980\",\n    \"dias_desde_compra\": \"1\",\n    \"estado_producto\": \"abierto_sin_uso\",\n    \"email_cliente\": \"cliente10@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1125\",\n    \"sku\": \"TE-330\",\n    \"unidades\": \"1\",\n    \"monto\": \"34990\",\n    \"dias_desde_compra\": \"22\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"cliente11@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-1126\",\n    \"sku\": \"MW-150\",\n    \"unidades\": \"1\",\n    \"monto\": \"79990\",\n    \"dias_desde_compra\": \"8\",\n    \"estado_producto\": \"con_fallas\",\n    \"email_cliente\": \"cliente12@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-C01\",\n    \"sku\": \"CB-010\",\n    \"unidades\": \"1\",\n    \"monto\": \"9990\",\n    \"dias_desde_compra\": \"1\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"control01@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-C02\",\n    \"sku\": \"LV-330\",\n    \"unidades\": \"1\",\n    \"monto\": \"289990\",\n    \"dias_desde_compra\": \"2\",\n    \"estado_producto\": \"sin_abrir\",\n    \"email_cliente\": \"control02@example.cl\"\n  },\n  {\n    \"id_solicitud\": \"DEV-C03\",\n    \"sku\": \"MW-150\",\n    \"unidades\": \"1\",\n    \"monto\": \"79990\",\n    \"dias_desde_compra\": \"29\",\n    \"estado_producto\": \"abierto_sin_uso\",\n    \"email_cliente\": \"control03@example.cl\"\n  }\n]\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        464,
+        0
+      ],
+      "id": "9f04f0c0-9342-4d82-b0c8-3f4e7201edb5",
+      "name": "HTTP Request"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d45fc41c-640b-4913-9ad2-7a98cb86172b",
+  "meta": {
+    "instanceId": "36e553f251eaf41af392811961b84bded7a17c484bad5c1f66f1fcdb1ce63582"
+  },
+  "nodeGroups": [],
+  "id": "e1oWjiG4od9FC1Vm",
+  "tags": []
+}
